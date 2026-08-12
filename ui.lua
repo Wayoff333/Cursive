@@ -95,10 +95,23 @@ local function UpdateRootBarFrame()
 	end
 
 	ui.rootBarFrame:SetWidth(config.maxcol * GetBarWidth())
-	-- Calculate height: title area + all rows + extra spacing
+	-- Calculate height: title area + GCD bar (if shown) + all rows + extra spacing
 	local title_size = 12 + config.spacing
-	local total_height = title_size + (config.maxrow * (config.height + config.spacing)) + config.spacing
+	local gcdbar_size = config.showgcdbar and (config.gcdbarheight + config.spacing) or 0
+	local total_height = title_size + gcdbar_size + (config.maxrow * (config.height + config.spacing)) + config.spacing
 	ui.rootBarFrame:SetHeight(total_height)
+
+	-- GCD swing-timer bar: thin strip spanning the frame width, sitting
+	-- just below the title caption and above the first row of bars.
+	if ui.rootBarFrame.gcdBar then
+		ui.rootBarFrame.gcdBar:SetHeight(config.gcdbarheight)
+		ui.rootBarFrame.gcdBar:SetWidth(config.gcdbarwidth)
+		ui.rootBarFrame.gcdBar:SetStatusBarTexture(config.bartexture)
+		ui.rootBarFrame.gcdBar.enabled = config.showgcdbar
+		if not config.showgcdbar then
+			ui.rootBarFrame.gcdBar:Hide()
+		end
+	end
 end
 
 local function CreateRoot()
@@ -138,6 +151,25 @@ local function CreateRoot()
 	frame.caption = frame:CreateFontString(nil, "HIGH", "GameFontWhite")
 	frame.caption:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -2)
 	frame.caption:SetTextColor(1, 1, 1, 1)
+
+	-- GCD swing-timer bar
+	local gcdBar = CreateFrame("StatusBar", "CursiveGcdBar", frame)
+	gcdBar:SetHeight(Cursive.db.profile.gcdbarheight)
+	gcdBar:SetWidth(Cursive.db.profile.gcdbarwidth)
+	gcdBar:SetPoint("TOPLEFT", frame.caption, "BOTTOMLEFT", -8, -2)
+	gcdBar:SetStatusBarTexture(Cursive.db.profile.bartexture)
+	gcdBar:SetStatusBarColor(1, .85, .1, .9)
+	gcdBar:SetMinMaxValues(0, 1)
+	gcdBar:SetValue(0)
+	gcdBar.enabled = Cursive.db.profile.showgcdbar
+
+	local gcdBarBg = gcdBar:CreateTexture(nil, "BACKGROUND")
+	gcdBarBg:SetAllPoints(gcdBar)
+	gcdBarBg:SetTexture(0, 0, 0)
+	gcdBarBg:SetAlpha(0.4)
+
+	gcdBar:Hide()
+	frame.gcdBar = gcdBar
 
 	UpdateRootBarFrame()
 
@@ -503,7 +535,8 @@ local function GetBarCords(row, col)
 		y = config.spacing + ((row - 1) * (config.height + config.spacing))
 	else
 		-- For downward expansion: use original logic (don't subtract 1 to account for header)
-		y = -(row * (config.height + config.spacing))
+		local gcdOffset = config.showgcdbar and (config.gcdbarheight + config.spacing) or 0
+		y = -(row * (config.height + config.spacing)) - gcdOffset
 	end
 	return x, y
 end
@@ -848,6 +881,54 @@ ui:SetScript("OnUpdate", function()
 		end
 	end
 
+end)
+
+-- GCD swing-timer bar. Cursive.ui.StartGcdBar(duration) is called from
+-- curses.lua's SPELL_GO_SELF handler, using nampower's precise
+-- GetSpellIdCooldown() data at the moment a curse actually goes off.
+-- This ticker just smoothly drains the bar from that snapshot every
+-- frame (unlike the throttled 0.1s main UI loop above).
+ui.gcdBarStart = nil
+ui.gcdBarDuration = nil
+
+ui.StartGcdBar = function(duration)
+	if not ui.rootBarFrame or not ui.rootBarFrame.gcdBar then
+		return
+	end
+	if not ui.rootBarFrame.gcdBar.enabled then
+		return
+	end
+	ui.gcdBarStart = GetTime()
+	ui.gcdBarDuration = duration
+end
+
+local gcdTicker = CreateFrame("Frame", "CursiveGcdTicker", UIParent)
+gcdTicker:SetScript("OnUpdate", function()
+	if not ui.rootBarFrame or not ui.rootBarFrame.gcdBar then
+		return
+	end
+
+	local bar = ui.rootBarFrame.gcdBar
+	if not bar.enabled or not ui.gcdBarStart then
+		if bar:IsShown() then
+			bar:Hide()
+		end
+		return
+	end
+
+	local remaining = (ui.gcdBarStart + ui.gcdBarDuration) - GetTime()
+	if remaining > 0 then
+		bar:SetMinMaxValues(0, ui.gcdBarDuration)
+		bar:SetValue(remaining)
+		if not bar:IsShown() then
+			bar:Show()
+		end
+	else
+		ui.gcdBarStart = nil
+		if bar:IsShown() then
+			bar:Hide()
+		end
+	end
 end)
 
 Cursive.ui = ui

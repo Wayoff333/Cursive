@@ -15,6 +15,9 @@ Cursive:RegisterDefaults("profile", {
 	clickthrough = false,
 	showbackdrop = false,
 	showtitle = true,
+	showgcdbar = true,
+	gcdbarheight = 3,
+	gcdbarwidth = 200,
 	showtargetindicator = true,
 	showraidicons = true,
 	showhealthbar = true,
@@ -548,6 +551,55 @@ Cursive.cmdtable = {
 			set = function(v)
 				Cursive.db.profile.showtitle = v
 				Cursive.UpdateFramesFromConfig()
+			end,
+		},
+		["showgcdbar"] = {
+			type = "toggle",
+			name = "Show GCD Bar",
+			desc = "Show a swing-timer style bar for your global cooldown",
+			order = 4,
+			get = function()
+				return Cursive.db.profile.showgcdbar
+			end,
+			set = function(v)
+				Cursive.db.profile.showgcdbar = v
+				Cursive.UpdateFramesFromConfig()
+			end,
+		},
+		["gcdbarheight"] = {
+			type = "range",
+			name = "GCD Bar Height",
+			desc = "Height of the GCD swing-timer bar",
+			order = 41,
+			min = 1,
+			max = 20,
+			step = 1,
+			get = function()
+				return Cursive.db.profile.gcdbarheight
+			end,
+			set = function(v)
+				if v ~= Cursive.db.profile.gcdbarheight then
+					Cursive.db.profile.gcdbarheight = v
+					Cursive.UpdateFramesFromConfig()
+				end
+			end,
+		},
+		["gcdbarwidth"] = {
+			type = "range",
+			name = "GCD Bar Width",
+			desc = "Width of the GCD swing-timer bar",
+			order = 42,
+			min = 20,
+			max = 400,
+			step = 5,
+			get = function()
+				return Cursive.db.profile.gcdbarwidth
+			end,
+			set = function(v)
+				if v ~= Cursive.db.profile.gcdbarwidth then
+					Cursive.db.profile.gcdbarwidth = v
+					Cursive.UpdateFramesFromConfig()
+				end
 			end,
 		},
 		["clickthrough"] = {

@@ -332,6 +332,17 @@ Cursive:RegisterEvent("SPELLCAST_INTERRUPTED", StopChanneling);
 
 -- player spell completions
 Cursive:RegisterEvent("SPELL_GO_SELF", function(itemId, spellID, casterGuid, targetGuid, castFlags, numTargetsHit, numTargetsMissed)
+  -- GCD swing-timer bar: fires regardless of hit/miss since the GCD still
+  -- applies either way. Uses nampower's precise category-cooldown data
+  -- rather than guessing at duration, since curses can be on a shorter
+  -- GCD category than normal spells (e.g. with Amplify Curse).
+  if curses.trackedCurseIds[spellID] and Cursive.ui and Cursive.ui.StartGcdBar and GetSpellIdCooldown then
+    local cd = GetSpellIdCooldown(spellID)
+    if cd and cd.isOnGcdCategoryCooldown == 1 and cd.gcdCategoryRemainingMs and cd.gcdCategoryRemainingMs > 0 then
+      Cursive.ui.StartGcdBar(cd.gcdCategoryRemainingMs / 1000)
+    end
+  end
+
   if curses.travelTimeSpellIds[spellID] and numTargetsMissed == 0 then
 			curses.pendingCast = {
 				spellID = spellID,
