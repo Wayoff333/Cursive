@@ -1,4 +1,7 @@
 # Cursive
+Added global cooldown bar
+<img width="975" height="710" alt="image" src="https://github.com/user-attachments/assets/1339dc02-ee2a-4c81-9c07-6306b77f1003" />
+
 
 > [!IMPORTANT]
 >
