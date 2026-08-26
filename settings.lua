@@ -26,6 +26,8 @@ Cursive:RegisterDefaults("profile", {
 	ghosticonalpha = 0.4,
 	showallmissingghosts = false,
 	flashonexpiring = true,
+	notifyshadowvuln = true,
+	shadowvulnflashspeed = 8,
 	showtargetindicator = true,
 	showraidicons = true,
 	showhealthbar = true,
@@ -471,6 +473,35 @@ local ghostOptions = {
 		set = function(v)
 			Cursive.db.profile.showallmissingghosts = v
 			Cursive.UpdateFramesFromConfig()
+		end,
+	},
+	["notifyshadowvuln"] = {
+		type = "toggle",
+		name = "Show Shadow Vulnerability Icon",
+		desc = "Show a dim icon in slot 1 that lights up and flashes when Shadow Vulnerability is active on the target (procs on Shadow Bolt crit with Improved Shadow Bolt)",
+		order = 7,
+		get = function()
+			return Cursive.db.profile.notifyshadowvuln
+		end,
+		set = function(v)
+			Cursive.db.profile.notifyshadowvuln = v
+			Cursive.UpdateFramesFromConfig()
+		end,
+	},
+	["shadowvulnflashspeed"] = {
+		type = "range",
+		name = "Shadow Vulnerability Flash Speed",
+		desc = "How fast the Shadow Vulnerability icon flashes when active (shows a live preview while adjusting)",
+		order = 8,
+		min = 1,
+		max = 20,
+		step = 1,
+		get = function()
+			return Cursive.db.profile.shadowvulnflashspeed
+		end,
+		set = function(v)
+			Cursive.db.profile.shadowvulnflashspeed = v
+			Cursive.ui.PreviewShadowVulnFlash()
 		end,
 	},
 }

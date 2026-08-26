@@ -8,6 +8,9 @@ local utils = Cursive.utils
 local filter = Cursive.filter
 
 local ui = CreateFrame("Frame", "CursiveUI", UIParent)
+-- Empirically-adjusted duration for the Shadow Vulnerability local
+-- countdown timer -- see comment at its usage for why this isn't 12s.
+local SHADOW_VULN_DURATION = 9
 -- Registry of currently-expiring curse icon frames that should flash.
 -- Populated/cleared during row updates, animated by a shared ticker below.
 ui.flashingCurseIcons = {}
@@ -515,6 +518,25 @@ local function CreateBarThirdSection(unitFrame, guid)
 		ghost:Hide()
 		unitFrame.ghostIcons[i] = ghost
 	end
+
+	-- Shadow Vulnerability indicator: always claims slot 1 when enabled.
+	-- Dim (ghost-like) when inactive, brightens and flashes when actually
+	-- active -- position gets set dynamically on each refresh.
+	local shadowVulnIcon = thirdSection:CreateTexture(nil, "OVERLAY")
+	shadowVulnIcon:SetWidth(config.curseiconsize)
+	shadowVulnIcon:SetHeight(config.curseiconsize)
+	shadowVulnIcon:SetTexture("Interface\\Icons\\Spell_Shadow_ShadowBolt")
+	shadowVulnIcon:SetAlpha(0.3)
+
+	shadowVulnIcon.timer = thirdSection:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	shadowVulnIcon.timer:SetFontObject(GameFontHighlight)
+	shadowVulnIcon.timer:SetFont(STANDARD_TEXT_FONT, config.cursetimersize, "OUTLINE")
+	shadowVulnIcon.timer:SetTextColor(1, 1, 1)
+	shadowVulnIcon.timer:SetAllPoints(shadowVulnIcon)
+	shadowVulnIcon.timer:Hide()
+
+	shadowVulnIcon:Hide()
+	unitFrame.shadowVulnIcon = shadowVulnIcon
 end
 
 local function CreateBar(row, col, guid)
@@ -708,7 +730,72 @@ local function DisplayGuid(guid)
 	end
 
 	-- update curses
-	local curseNumber = 1
+	local cfg = Cursive.db.profile
+	-- Shadow Vulnerability always claims slot 1 when enabled, so real
+	-- curses/ghosts start filling from slot 2 instead.
+	local curseNumber = cfg.notifyshadowvuln and 2 or 1
+
+	-- Shadow Vulnerability indicator: always visible (dim) once enabled,
+	-- brightens and flashes when actually active, rather than showing/
+	-- hiding entirely -- reuses the same flash-ticker infrastructure as
+	-- the (currently unused) curse-expiring flash.
+	if cfg.notifyshadowvuln then
+		local hasShadowVuln = false
+		local i = 1
+		while true do
+			local tex = UnitDebuff(guid, i)
+			if not tex then break end
+			if string.find(tex, "Spell_Shadow_ShadowBolt", 1, true) then
+				hasShadowVuln = true
+				break
+			end
+			i = i + 1
+		end
+		-- Preview mode: force the flashing state regardless of real debuff
+		-- presence while previewing a flash-speed change in settings.
+		if ui.shadowVulnPreviewUntil and GetTime() < ui.shadowVulnPreviewUntil then
+			hasShadowVuln = true
+		end
+		unitFrame.shadowVulnIcon:ClearAllPoints()
+		if cfg.invertbars then
+			unitFrame.shadowVulnIcon:SetPoint("RIGHT", unitFrame.thirdSection, "RIGHT", -(1 * ui.padding), 0)
+		else
+			unitFrame.shadowVulnIcon:SetPoint("LEFT", unitFrame.thirdSection, "LEFT", 1 * ui.padding, 0)
+		end
+		unitFrame.shadowVulnIcon:Show()
+		if hasShadowVuln then
+			if not unitFrame.shadowVulnActive then
+				-- Newly appeared -- start our own countdown, since this
+				-- client has no API for a third party's remaining aura
+				-- duration. Wowhead's classic spell page listed 12 seconds,
+				-- but real observed behavior showed the icon disappearing
+				-- ~3s before that countdown hit zero -- adjusted to 9s to
+				-- match what's actually been seen in practice (Wowhead's
+				-- value may reflect a different talent rank, or this
+				-- server's own tuning differs from stock classic data).
+				unitFrame.shadowVulnAppliedAt = GetTime()
+			end
+			unitFrame.shadowVulnActive = true
+			local remaining = SHADOW_VULN_DURATION - (GetTime() - unitFrame.shadowVulnAppliedAt)
+			if remaining > 0 then
+				unitFrame.shadowVulnIcon.timer:SetText(math.ceil(remaining))
+				unitFrame.shadowVulnIcon.timer:Show()
+			else
+				unitFrame.shadowVulnIcon.timer:Hide()
+			end
+			ui.flashingCurseIcons[unitFrame.shadowVulnIcon] = cfg.shadowvulnflashspeed
+		else
+			unitFrame.shadowVulnActive = false
+			ui.flashingCurseIcons[unitFrame.shadowVulnIcon] = nil
+			unitFrame.shadowVulnIcon:SetAlpha(0.3)
+			unitFrame.shadowVulnIcon.timer:Hide()
+		end
+	else
+		unitFrame.shadowVulnIcon:Hide()
+		unitFrame.shadowVulnIcon.timer:Hide()
+		unitFrame.shadowVulnActive = false
+		ui.flashingCurseIcons[unitFrame.shadowVulnIcon] = nil
+	end
 
 	-- make sure old curses are hidden
 	for i = 1, Cursive.db.profile.maxcurses do
@@ -767,8 +854,6 @@ local function DisplayGuid(guid)
       end
 		end
 	end
-
-	local cfg = Cursive.db.profile
 
 	-- Hide all ghost slots first, matching the same pattern used for real
 	-- curse icons above.
@@ -1042,6 +1127,16 @@ function ui.PreviewGcdBar()
 	ui.gcdPreviewUntil = GetTime() + 4
 end
 
+ui.shadowVulnPreviewUntil = nil
+
+-- Call this from the flash-speed setting's set() callback to force any
+-- currently-displayed Shadow Vulnerability icon into its flashing state
+-- temporarily, regardless of real debuff presence -- only affects rows
+-- that are actually displayed right now (requires a target/row visible).
+function ui.PreviewShadowVulnFlash()
+	ui.shadowVulnPreviewUntil = GetTime() + 4
+end
+
 gcdTicker:SetScript("OnUpdate", function()
 	if not ui.rootBarFrame or not ui.rootBarFrame.gcdBar then
 		return
@@ -1082,11 +1177,11 @@ gcdTicker:SetScript("OnUpdate", function()
 	end
 end)
 
--- Flashes any curse icon currently registered as expiring, via a smooth
--- alpha oscillation. Single shared ticker for all rows rather than one per
--- icon, since the registry is normally small (just whatever's expiring).
+-- Flashes any icon currently registered, via a smooth alpha oscillation.
+-- Single shared ticker for all rows rather than one per icon. Registry
+-- values are a speed multiplier (falls back to 3 if just `true`), so
+-- different icons can flash at different rates using the same ticker.
 local flashTicker = CreateFrame("Frame", "CursiveFlashTicker", UIParent)
-local flashTime = 0
 flashTicker:SetScript("OnUpdate", function()
 	local any = false
 	for icon in pairs(ui.flashingCurseIcons) do
@@ -1096,9 +1191,10 @@ flashTicker:SetScript("OnUpdate", function()
 	if not any then
 		return
 	end
-	flashTime = flashTime + arg1 * 3
-	local alpha = 0.35 + (0.65 * (0.5 + 0.5 * math.sin(flashTime)))
-	for icon in pairs(ui.flashingCurseIcons) do
+	local now = GetTime()
+	for icon, speed in pairs(ui.flashingCurseIcons) do
+		local s = (type(speed) == "number") and speed or 3
+		local alpha = 0.35 + (0.65 * (0.5 + 0.5 * math.sin(now * s)))
 		icon:SetAlpha(alpha)
 	end
 end)
