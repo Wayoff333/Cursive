@@ -8,6 +8,9 @@ local utils = Cursive.utils
 local filter = Cursive.filter
 
 local ui = CreateFrame("Frame", "CursiveUI", UIParent)
+-- Registry of currently-expiring curse icon frames that should flash.
+-- Populated/cleared during row updates, animated by a shared ticker below.
+ui.flashingCurseIcons = {}
 
 ui.border = {
 	edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -107,6 +110,7 @@ local function UpdateRootBarFrame()
 		ui.rootBarFrame.gcdBar:SetHeight(config.gcdbarheight)
 		ui.rootBarFrame.gcdBar:SetWidth(config.gcdbarwidth)
 		ui.rootBarFrame.gcdBar:SetStatusBarTexture(config.bartexture)
+		ui.rootBarFrame.gcdBar:SetStatusBarColor(config.gcdbarcolor.r, config.gcdbarcolor.g, config.gcdbarcolor.b, 0.9)
 		ui.rootBarFrame.gcdBar.enabled = config.showgcdbar
 		if not config.showgcdbar then
 			ui.rootBarFrame.gcdBar:Hide()
@@ -158,7 +162,7 @@ local function CreateRoot()
 	gcdBar:SetWidth(Cursive.db.profile.gcdbarwidth)
 	gcdBar:SetPoint("TOPLEFT", frame.caption, "BOTTOMLEFT", -8, -2)
 	gcdBar:SetStatusBarTexture(Cursive.db.profile.bartexture)
-	gcdBar:SetStatusBarColor(1, .85, .1, .9)
+	gcdBar:SetStatusBarColor(Cursive.db.profile.gcdbarcolor.r, Cursive.db.profile.gcdbarcolor.g, Cursive.db.profile.gcdbarcolor.b, 0.9)
 	gcdBar:SetMinMaxValues(0, 1)
 	gcdBar:SetValue(0)
 	gcdBar.enabled = Cursive.db.profile.showgcdbar
@@ -496,6 +500,21 @@ local function CreateBarThirdSection(unitFrame, guid)
 		curse:Hide()
 		unitFrame["curse" .. i] = curse
 	end
+
+	-- Ghost icons: faded icons showing missing curse/DoT(s) to cast on
+	-- this target. One frame per possible slot (same count as real curse
+	-- icons), so "show all missing" mode can display several at once.
+	-- Repositioned dynamically on each refresh to slot into wherever the
+	-- next real curse icon would actually go.
+	unitFrame.ghostIcons = {}
+	for i = 1, config.maxcurses do
+		local ghost = thirdSection:CreateTexture(nil, "OVERLAY")
+		ghost:SetWidth(config.curseiconsize)
+		ghost:SetHeight(config.curseiconsize)
+		ghost:SetAlpha(config.ghosticonalpha)
+		ghost:Hide()
+		unitFrame.ghostIcons[i] = ghost
+	end
 end
 
 local function CreateBar(row, col, guid)
@@ -549,6 +568,70 @@ local function hasAnySpellId(guid, spellIds)
 		end
 	end
 	return nil
+end
+
+-- Priority list for the ghost icon: checks curse presence first (via
+-- Cursive's own tracked curse data), then DoTs in order, returning the
+-- icon path for whichever is missing first. Curse icon textures (CoE/CoS/
+-- CoR/CoW) are confirmed-correct from prior testing; the DoT textures and
+-- the Curse of Agony fallback below are reasonable but UNVERIFIED guesses
+-- -- worth checking in-game and reporting back if any look wrong.
+local GHOST_DOT_ICONS = {
+	{ name = "Corruption",  texture = "Spell_Shadow_AbominationExplosion", settingKey = "showghostcorruption" },
+	{ name = "Immolate",    texture = "Spell_Fire_Immolation",             settingKey = "showghostimmolate" },
+	{ name = "Siphon Life", texture = "Spell_Shadow_Requiem",              settingKey = "showghostsiphonlife" },
+}
+local GHOST_CURSE_FALLBACK_ICON = "Interface\\Icons\\Spell_Shadow_CurseOfSargeras" -- Curse of Agony
+
+local function GetGhostTextures(guid)
+	local config = Cursive.db.profile
+	local textures = {}
+
+	-- Curse check: specifically checks Curse of Agony via Cursive's own
+	-- tested HasCurse API, rather than a custom table check. This matters
+	-- for Malediction warlocks -- casting Elements/Shadow/Recklessness also
+	-- applies Agony, so "is any curse present" isn't the right question;
+	-- what matters is whether Agony itself has fallen off and needs
+	-- refreshing, even if another curse is technically still ticking.
+	-- malediction=0 here since we're already asking about Agony directly,
+	-- not one of the curses that would normally redirect to it.
+	if config.showghostcurse then
+		local hasCurse = Cursive.curses:HasCurse(L["curse of agony"], guid, 0, 0)
+		if not hasCurse then
+			table.insert(textures, GHOST_CURSE_FALLBACK_ICON)
+			if not config.showallmissingghosts then
+				return textures
+			end
+		end
+	end
+
+	-- DoT check: direct debuff scan via SuperWoW's GUID-based UnitDebuff,
+	-- since these aren't part of Cursive's own curse tracking. Each DoT
+	-- checked individually against its own toggle, since not everyone
+	-- runs all three (e.g. pure Affliction warlocks often skip Immolate).
+	for _, dot in ipairs(GHOST_DOT_ICONS) do
+		if config[dot.settingKey] then
+			local found = false
+			local i = 1
+			while true do
+				local tex = UnitDebuff(guid, i)
+				if not tex then break end
+				if string.find(tex, dot.texture, 1, true) then
+					found = true
+					break
+				end
+				i = i + 1
+			end
+			if not found then
+				table.insert(textures, "Interface\\Icons\\" .. dot.texture)
+				if not config.showallmissingghosts then
+					return textures
+				end
+			end
+		end
+	end
+
+	return textures -- empty if everything's up (or all checks disabled)
 end
 
 local function GetSortedCurses(guidCurses)
@@ -632,6 +715,8 @@ local function DisplayGuid(guid)
 		local curse = unitFrame["curse" .. i]
 		curse:Hide()
 		curse.timer:Hide()
+		ui.flashingCurseIcons[curse] = nil
+		curse:SetAlpha(1)
 	end
 
 	local guidCurses = Cursive.curses.guids[guid]
@@ -657,15 +742,60 @@ local function DisplayGuid(guid)
         curse.timer:Show()
         curse:Show()
 
-        if remaining < 1 then
+      if remaining < 1 then
           if Cursive.curses:ShouldPlayExpiringSound(curseName, guid) then
             PlaySoundFile("Interface\\AddOns\\Cursive\\sounds\\expiring.mp3")
           end
-        elseif Cursive.curses:HasRequestedExpiringSound(curseName, guid) then
-          Cursive.curses:EnableExpiringSound(curseName, guid)
+        else
+          if Cursive.curses:HasRequestedExpiringSound(curseName, guid) then
+            Cursive.curses:EnableExpiringSound(curseName, guid)
+          end
         end
+
+        -- Flash check: independent, wider threshold (<=1 rather than <1)
+        -- since remaining is an integer-quantized value that may jump
+        -- straight from 2 to gone without ever reading a value strictly
+        -- less than 1 for any meaningful duration.
+        if Cursive.db.profile.flashonexpiring and remaining <= 1 then
+          ui.flashingCurseIcons[curse] = true
+        else
+          ui.flashingCurseIcons[curse] = nil
+          curse:SetAlpha(1)
+        end
+
         curseNumber = curseNumber + 1
       end
+		end
+	end
+
+	local cfg = Cursive.db.profile
+
+	-- Hide all ghost slots first, matching the same pattern used for real
+	-- curse icons above.
+	for i = 1, cfg.maxcurses do
+		if unitFrame.ghostIcons[i] then
+			unitFrame.ghostIcons[i]:Hide()
+		end
+	end
+
+	if cfg.showghostcurse or cfg.showghostcorruption or cfg.showghostimmolate or cfg.showghostsiphonlife then
+		local ghostTextures = GetGhostTextures(guid)
+		local slot = curseNumber
+		for _, tex in ipairs(ghostTextures) do
+			if slot > cfg.maxcurses then
+				break
+			end
+			local ghostIcon = unitFrame.ghostIcons[slot]
+			ghostIcon:ClearAllPoints()
+			if cfg.invertbars then
+				local rightOffset = slot * ui.padding + ((slot - 1) * cfg.curseiconsize)
+				ghostIcon:SetPoint("RIGHT", unitFrame.thirdSection, "RIGHT", -rightOffset, 0)
+			else
+				ghostIcon:SetPoint("LEFT", unitFrame.thirdSection, "LEFT", slot * ui.padding + ((slot - 1) * cfg.curseiconsize), 0)
+			end
+			ghostIcon:SetTexture(tex)
+			ghostIcon:Show()
+			slot = slot + 1
 		end
 	end
 
@@ -903,12 +1033,33 @@ ui.StartGcdBar = function(duration)
 end
 
 local gcdTicker = CreateFrame("Frame", "CursiveGcdTicker", UIParent)
+ui.gcdPreviewUntil = nil
+
+-- Call this from any GCD bar setting's set() callback to show a temporary
+-- static preview fill, since the real bar normally only appears during an
+-- actual GCD -- this lets color/size changes be seen immediately.
+function ui.PreviewGcdBar()
+	ui.gcdPreviewUntil = GetTime() + 4
+end
+
 gcdTicker:SetScript("OnUpdate", function()
 	if not ui.rootBarFrame or not ui.rootBarFrame.gcdBar then
 		return
 	end
 
 	local bar = ui.rootBarFrame.gcdBar
+
+	-- Preview mode: triggered directly by changing a GCD bar setting,
+	-- rather than trying to detect whether the options menu is open.
+	if ui.gcdPreviewUntil and GetTime() < ui.gcdPreviewUntil then
+		bar:SetMinMaxValues(0, 1)
+		bar:SetValue(0.6)
+		if not bar:IsShown() then
+			bar:Show()
+		end
+		return
+	end
+
 	if not bar.enabled or not ui.gcdBarStart then
 		if bar:IsShown() then
 			bar:Hide()
@@ -928,6 +1079,27 @@ gcdTicker:SetScript("OnUpdate", function()
 		if bar:IsShown() then
 			bar:Hide()
 		end
+	end
+end)
+
+-- Flashes any curse icon currently registered as expiring, via a smooth
+-- alpha oscillation. Single shared ticker for all rows rather than one per
+-- icon, since the registry is normally small (just whatever's expiring).
+local flashTicker = CreateFrame("Frame", "CursiveFlashTicker", UIParent)
+local flashTime = 0
+flashTicker:SetScript("OnUpdate", function()
+	local any = false
+	for icon in pairs(ui.flashingCurseIcons) do
+		any = true
+		break
+	end
+	if not any then
+		return
+	end
+	flashTime = flashTime + arg1 * 3
+	local alpha = 0.35 + (0.65 * (0.5 + 0.5 * math.sin(flashTime)))
+	for icon in pairs(ui.flashingCurseIcons) do
+		icon:SetAlpha(alpha)
 	end
 end)
 

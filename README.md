@@ -1,15 +1,4 @@
-# Cursive - updated for octowow
--Requires nampower https://github.com/Emyrk/nampower
-
--Added global cooldown bar can change size/color in settings
-
--Added ghost icons for DOTs can toggle on/off in settings
-
-<img width="946" height="779" alt="image" src="https://github.com/user-attachments/assets/6d73aa87-e928-4a95-8562-17f8311a8d80" />
-<img width="476" height="523" alt="image" src="https://github.com/user-attachments/assets/328e1a25-2a98-4c23-81a3-0572fb56127c" />
-
-
-
+# Cursive
 
 > [!IMPORTANT]
 >

@@ -18,6 +18,14 @@ Cursive:RegisterDefaults("profile", {
 	showgcdbar = true,
 	gcdbarheight = 3,
 	gcdbarwidth = 200,
+	gcdbarcolor = { r = 1, g = 0.85, b = 0.1 },
+	showghostcurse = true,
+	showghostcorruption = true,
+	showghostimmolate = true,
+	showghostsiphonlife = true,
+	ghosticonalpha = 0.4,
+	showallmissingghosts = false,
+	flashonexpiring = true,
 	showtargetindicator = true,
 	showraidicons = true,
 	showhealthbar = true,
@@ -82,6 +90,19 @@ local function splitIgnoreString(str, delimiter)
 end
 
 local barOptions = {
+	["flashonexpiring"] = {
+		type = "toggle",
+		name = "Flash Icon On Expiring",
+		desc = "Flash a curse/DoT icon when it's about to fall off (same threshold as the expiring sound)",
+		order = 96,
+		get = function()
+			return Cursive.db.profile.flashonexpiring
+		end,
+		set = function(v)
+			Cursive.db.profile.flashonexpiring = v
+			Cursive.UpdateFramesFromConfig()
+		end,
+	},
 	["invertbars"] = {
 		type = "toggle",
 		name = "Invert Bar Display",
@@ -370,6 +391,90 @@ local barOptions = {
 	},
 }
 
+local ghostOptions = {
+	["showghostcurse"] = {
+		type = "toggle",
+		name = "Show Ghost Curse Icon",
+		desc = "Show a faded icon suggesting a curse to cast when the target has none",
+		order = 1,
+		get = function()
+			return Cursive.db.profile.showghostcurse
+		end,
+		set = function(v)
+			Cursive.db.profile.showghostcurse = v
+			Cursive.UpdateFramesFromConfig()
+		end,
+	},
+	["showghostcorruption"] = {
+		type = "toggle",
+		name = "Show Ghost Corruption",
+		desc = "Show a faded icon suggesting Corruption when missing from the target",
+		order = 2,
+		get = function()
+			return Cursive.db.profile.showghostcorruption
+		end,
+		set = function(v)
+			Cursive.db.profile.showghostcorruption = v
+			Cursive.UpdateFramesFromConfig()
+		end,
+	},
+	["showghostimmolate"] = {
+		type = "toggle",
+		name = "Show Ghost Immolate",
+		desc = "Show a faded icon suggesting Immolate when missing from the target",
+		order = 3,
+		get = function()
+			return Cursive.db.profile.showghostimmolate
+		end,
+		set = function(v)
+			Cursive.db.profile.showghostimmolate = v
+			Cursive.UpdateFramesFromConfig()
+		end,
+	},
+	["showghostsiphonlife"] = {
+		type = "toggle",
+		name = "Show Ghost Siphon Life",
+		desc = "Show a faded icon suggesting Siphon Life when missing from the target",
+		order = 4,
+		get = function()
+			return Cursive.db.profile.showghostsiphonlife
+		end,
+		set = function(v)
+			Cursive.db.profile.showghostsiphonlife = v
+			Cursive.UpdateFramesFromConfig()
+		end,
+	},
+	["ghostalpha"] = {
+		type = "range",
+		name = "Ghost Icon Transparency",
+		desc = "How faded the ghost icons appear (higher = more visible)",
+		order = 5,
+		min = 10,
+		max = 100,
+		step = 5,
+		get = function()
+			return math.floor(Cursive.db.profile.ghosticonalpha * 100 + 0.5)
+		end,
+		set = function(v)
+			Cursive.db.profile.ghosticonalpha = v / 100
+			Cursive.UpdateFramesFromConfig()
+		end,
+	},
+	["showallmissingghosts"] = {
+		type = "toggle",
+		name = "Show All Missing (not just next)",
+		desc = "Show a ghost icon for every missing curse/DoT at once, instead of just the next one in priority order",
+		order = 6,
+		get = function()
+			return Cursive.db.profile.showallmissingghosts
+		end,
+		set = function(v)
+			Cursive.db.profile.showallmissingghosts = v
+			Cursive.UpdateFramesFromConfig()
+		end,
+	},
+}
+
 local mobFilters = {
 	["incombat"] = {
 		type = "toggle",
@@ -582,6 +687,7 @@ Cursive.cmdtable = {
 					Cursive.db.profile.gcdbarheight = v
 					Cursive.UpdateFramesFromConfig()
 				end
+				Cursive.ui.PreviewGcdBar()
 			end,
 		},
 		["gcdbarwidth"] = {
@@ -600,6 +706,23 @@ Cursive.cmdtable = {
 					Cursive.db.profile.gcdbarwidth = v
 					Cursive.UpdateFramesFromConfig()
 				end
+				Cursive.ui.PreviewGcdBar()
+			end,
+		},
+		["gcdbarcolor"] = {
+			type = "color",
+			name = "GCD Bar Color",
+			desc = "Color of the GCD swing-timer bar (shows a preview fill while you adjust it)",
+			order = 43,
+			get = function()
+				return Cursive.db.profile.gcdbarcolor.r, Cursive.db.profile.gcdbarcolor.g, Cursive.db.profile.gcdbarcolor.b
+			end,
+			set = function(r, g, b)
+				Cursive.db.profile.gcdbarcolor.r = r
+				Cursive.db.profile.gcdbarcolor.g = g
+				Cursive.db.profile.gcdbarcolor.b = b
+				Cursive.UpdateFramesFromConfig()
+				Cursive.ui.PreviewGcdBar()
 			end,
 		},
 		["clickthrough"] = {
@@ -651,6 +774,13 @@ Cursive.cmdtable = {
 			desc = L["Bar Display Settings"],
 			order = 13,
 			args = barOptions
+		},
+		["ghosticons"] = {
+			type = "group",
+			name = "Ghost Icon Settings",
+			desc = "Ghost Icon Settings",
+			order = 14,
+			args = ghostOptions
 		},
 		["filters"] = {
 			type = "group",
