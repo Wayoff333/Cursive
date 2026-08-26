@@ -1,4 +1,12 @@
-# Cursive
+# Cursive for Octowow
+-requires nampower https://github.com/Emyrk/nampower
+
+-added configable global cooldown bar
+
+-added ghost image option for dots
+
+<img width="978" height="777" alt="image" src="https://github.com/user-attachments/assets/38b0c87f-28ea-4ad5-9f59-9daee1e9275d" />
+
 
 > [!IMPORTANT]
 >
