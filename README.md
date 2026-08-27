@@ -2,7 +2,7 @@
 
 -new settings menu
 
--ghost dots icons
+-ghost dot icons
 
 -Shadow vulnerability icon
 
