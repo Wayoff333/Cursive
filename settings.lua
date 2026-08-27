@@ -24,10 +24,12 @@ Cursive:RegisterDefaults("profile", {
 	showghostimmolate = true,
 	showghostsiphonlife = true,
 	ghosticonalpha = 0.4,
-	showallmissingghosts = false,
+	ghosticongreyscale = false,
+	showallmissingghosts = true,
 	flashonexpiring = true,
 	notifyshadowvuln = true,
 	shadowvulnflashspeed = 8,
+	othercursealpha = 0.6,
 	showtargetindicator = true,
 	showraidicons = true,
 	showhealthbar = true,
@@ -102,6 +104,22 @@ local barOptions = {
 		end,
 		set = function(v)
 			Cursive.db.profile.flashonexpiring = v
+			Cursive.UpdateFramesFromConfig()
+		end,
+	},
+	["othercursealpha"] = {
+		type = "range",
+		name = "Other Players' Curse Opacity",
+		desc = "How visible curses cast by OTHER warlocks appear (lower = more faded/greyed out). This client doesn't support a true continuous greyscale amount, so this dims via transparency instead, on top of the existing desaturation.",
+		order = 97,
+		min = 20,
+		max = 100,
+		step = 5,
+		get = function()
+			return math.floor(Cursive.db.profile.othercursealpha * 100 + 0.5)
+		end,
+		set = function(v)
+			Cursive.db.profile.othercursealpha = v / 100
 			Cursive.UpdateFramesFromConfig()
 		end,
 	},
@@ -462,11 +480,24 @@ local ghostOptions = {
 			Cursive.UpdateFramesFromConfig()
 		end,
 	},
+	["ghostgreyscale"] = {
+		type = "toggle",
+		name = "Greyscale Ghost Icons",
+		desc = "Desaturate the ghost icons",
+		order = 6,
+		get = function()
+			return Cursive.db.profile.ghosticongreyscale
+		end,
+		set = function(v)
+			Cursive.db.profile.ghosticongreyscale = v
+			Cursive.UpdateFramesFromConfig()
+		end,
+	},
 	["showallmissingghosts"] = {
 		type = "toggle",
 		name = "Show All Missing (not just next)",
 		desc = "Show a ghost icon for every missing curse/DoT at once, instead of just the next one in priority order",
-		order = 6,
+		order = 7,
 		get = function()
 			return Cursive.db.profile.showallmissingghosts
 		end,
@@ -479,7 +510,7 @@ local ghostOptions = {
 		type = "toggle",
 		name = "Show Shadow Vulnerability Icon",
 		desc = "Show a dim icon in slot 1 that lights up and flashes when Shadow Vulnerability is active on the target (procs on Shadow Bolt crit with Improved Shadow Bolt)",
-		order = 7,
+		order = 8,
 		get = function()
 			return Cursive.db.profile.notifyshadowvuln
 		end,
@@ -492,7 +523,7 @@ local ghostOptions = {
 		type = "range",
 		name = "Shadow Vulnerability Flash Speed",
 		desc = "How fast the Shadow Vulnerability icon flashes when active (shows a live preview while adjusting)",
-		order = 8,
+		order = 9,
 		min = 1,
 		max = 20,
 		step = 1,
@@ -910,3 +941,19 @@ for k, v in pairs(args) do
 	end
 end
 -- XXX end hack
+
+-- Right-click opens a standalone settings window instead of the Dewdrop
+-- menu. Confirmed from FuBarPlugin-2.0's actual source: its OnMouseDown
+-- handler calls self:OpenMenu() specifically on right-click, so replacing
+-- that method redirects right-click without touching left-click at all.
+CursiveOptions.OpenMenu = function(self)
+	Cursive.ui.CreateSettingsWindow():Show()
+end
+
+-- Left-click also opens the same window. FuBarPlugin-2.0's frame calls
+-- self:OnClick(button) for any click (separate from the right-click-only
+-- OnMouseDown/OpenMenu path above), so this covers left-click without
+-- interfering with the right-click handler.
+CursiveOptions.OnClick = function(self, button)
+	Cursive.ui.CreateSettingsWindow():Show()
+end

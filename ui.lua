@@ -820,8 +820,10 @@ local function DisplayGuid(guid)
 
         if curseData["currentPlayer"] == false then
           curse:SetDesaturated(true); -- desaturate if not applied by current player
+          curse:SetAlpha(Cursive.db.profile.othercursealpha or 1)
         else
           curse:SetDesaturated(false); -- saturate if applied by current player
+          curse:SetAlpha(1)
         end
 
         -- curse:SetTexCoord(.078, .92, .079, .937) rounded icons
@@ -839,12 +841,14 @@ local function DisplayGuid(guid)
           end
         end
 
-        -- Flash check: independent, wider threshold (<=1 rather than <1)
-        -- since remaining is an integer-quantized value that may jump
-        -- straight from 2 to gone without ever reading a value strictly
-        -- less than 1 for any meaningful duration.
-        if Cursive.db.profile.flashonexpiring and remaining <= 1 then
-          ui.flashingCurseIcons[curse] = true
+        -- Flash check: independent, wider threshold than the sound's <1.
+        -- Confirmed via live diagnostic earlier that "remaining" is
+        -- integer-quantized and stays at 2 for nearly a full second --
+        -- using <=2 catches that reliably-observed value directly, rather
+        -- than gambling on 1/0 ever actually appearing before the curse
+        -- disappears from the list entirely.
+        if Cursive.db.profile.flashonexpiring and remaining <= 2 then
+          ui.flashingCurseIcons[curse] = 3
         else
           ui.flashingCurseIcons[curse] = nil
           curse:SetAlpha(1)
@@ -879,6 +883,7 @@ local function DisplayGuid(guid)
 				ghostIcon:SetPoint("LEFT", unitFrame.thirdSection, "LEFT", slot * ui.padding + ((slot - 1) * cfg.curseiconsize), 0)
 			end
 			ghostIcon:SetTexture(tex)
+			ghostIcon:SetDesaturated(cfg.ghosticongreyscale and true or false)
 			ghostIcon:Show()
 			slot = slot + 1
 		end
@@ -1198,5 +1203,238 @@ flashTicker:SetScript("OnUpdate", function()
 		icon:SetAlpha(alpha)
 	end
 end)
+
+-------------------------------------------------------------------------------
+-- Standalone settings window (alternative to the Dewdrop dropdown menu).
+-- Generic renderer reads the EXISTING Ace2-style options table (Cursive.
+-- cmdtable) directly rather than hand-transcribing every setting, so it
+-- automatically stays in sync with whatever settings.lua defines.
+-------------------------------------------------------------------------------
+
+local settingsWindow = nil
+
+-- Ace2 options entries can specify get/set as either a direct function, or
+-- a STRING naming a method to call on a "handler" object (falling back to
+-- Cursive itself, since Cursive.cmdtable.handler = Cursive). This resolves
+-- either form correctly. Fixed-arity (not vararg) since this client runs
+-- Lua 5.0, where "..." can't be used directly as a forwarded expression
+-- the way Lua 5.1 allows -- 3 args covers every case used here (color
+-- needs r,g,b; toggle/range need at most 1; get calls need 0).
+local function CallGetSet(entry, isSet, a1, a2, a3)
+	local fn = isSet and entry.set or entry.get
+	if type(fn) == "function" then
+		return fn(a1, a2, a3)
+	elseif type(fn) == "string" then
+		local handler = entry.handler or Cursive
+		return handler[fn](handler, a1, a2, a3)
+	end
+end
+
+local function MakeHeaderWidget(parent, text, yOff)
+	local hdr = parent:CreateFontString(nil, "OVERLAY")
+	hdr:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
+	hdr:SetTextColor(0.7, 0.5, 1, 1)
+	hdr:SetPoint("TopLeft", parent, "TopLeft", 4, yOff)
+	hdr:SetText(text)
+
+	local divider = parent:CreateTexture(nil, "ARTWORK")
+	divider:SetHeight(1)
+	divider:SetPoint("TopLeft", parent, "TopLeft", 4, yOff - 12)
+	divider:SetPoint("TopRight", parent, "TopRight", -4, yOff - 12)
+	divider:SetTexture(0.3, 0.15, 0.5, 0.8)
+
+	return 18
+end
+
+local function MakeToggleWidget(parent, entry, yOff)
+	local cb = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+	cb:SetWidth(20) cb:SetHeight(20)
+	cb:SetPoint("TopLeft", parent, "TopLeft", 8, yOff)
+	cb:SetChecked(CallGetSet(entry, false) and true or false)
+	cb:SetScript("OnClick", function()
+		CallGetSet(entry, true, this:GetChecked() and true or false)
+		this:SetChecked(CallGetSet(entry, false) and true or false)
+	end)
+
+	local label = parent:CreateFontString(nil, "OVERLAY")
+	label:SetFont(STANDARD_TEXT_FONT, 10, "")
+	label:SetTextColor(0.9, 0.9, 0.9, 1)
+	label:SetPoint("Left", cb, "Right", 2, 0)
+	label:SetWidth(230)
+	label:SetJustifyH("Left")
+	label:SetText(entry.name or "")
+
+	return 24
+end
+
+local sliderCounter = 0
+local function MakeRangeWidget(parent, entry, yOff)
+	local label = parent:CreateFontString(nil, "OVERLAY")
+	label:SetFont(STANDARD_TEXT_FONT, 10, "")
+	label:SetTextColor(0.9, 0.9, 0.9, 1)
+	label:SetPoint("TopLeft", parent, "TopLeft", 8, yOff)
+	label:SetText(entry.name or "")
+
+	local valLbl = parent:CreateFontString(nil, "OVERLAY")
+	valLbl:SetFont(STANDARD_TEXT_FONT, 10, "")
+	valLbl:SetTextColor(0.6, 0.85, 1, 1)
+	valLbl:SetPoint("TopRight", parent, "TopRight", -10, yOff)
+	valLbl:SetJustifyH("Right")
+	valLbl:SetText(tostring(CallGetSet(entry, false)))
+
+	sliderCounter = sliderCounter + 1
+	local sliderName = "CursiveSettingsWindowSlider" .. sliderCounter
+	local slider = CreateFrame("Slider", sliderName, parent, "OptionsSliderTemplate")
+	slider:SetWidth(250)
+	slider:SetHeight(14)
+	slider:SetPoint("TopLeft", parent, "TopLeft", 10, yOff - 16)
+	slider:SetMinMaxValues(entry.min or 0, entry.max or 100)
+	slider:SetValueStep(entry.step or 1)
+	slider:SetValue(CallGetSet(entry, false) or 0)
+	getglobal(sliderName .. "Low"):SetText(tostring(entry.min or 0))
+	getglobal(sliderName .. "High"):SetText(tostring(entry.max or 100))
+	getglobal(sliderName .. "Text"):SetText("")
+	slider:SetScript("OnValueChanged", function()
+		CallGetSet(entry, true, this:GetValue())
+		valLbl:SetText(tostring(CallGetSet(entry, false)))
+	end)
+
+	return 40
+end
+
+local function MakeColorWidget(parent, entry, yOff)
+	local label = parent:CreateFontString(nil, "OVERLAY")
+	label:SetFont(STANDARD_TEXT_FONT, 10, "")
+	label:SetTextColor(0.9, 0.9, 0.9, 1)
+	label:SetPoint("TopLeft", parent, "TopLeft", 8, yOff)
+	label:SetText(entry.name or "")
+
+	local swatch = CreateFrame("Button", nil, parent)
+	swatch:SetWidth(16) swatch:SetHeight(16)
+	swatch:SetPoint("TopRight", parent, "TopRight", -10, yOff)
+	local tex = swatch:CreateTexture(nil, "OVERLAY")
+	tex:SetAllPoints(swatch)
+	local r, g, b = CallGetSet(entry, false)
+	tex:SetTexture(r, g, b)
+	swatch.tex = tex
+
+	swatch:SetScript("OnClick", function()
+		local r2, g2, b2 = CallGetSet(entry, false)
+		ColorPickerFrame.func = function()
+			local nr, ng, nb = ColorPickerFrame:GetColorRGB()
+			CallGetSet(entry, true, nr, ng, nb)
+			swatch.tex:SetTexture(nr, ng, nb)
+		end
+		ColorPickerFrame.cancelFunc = function(prev)
+			CallGetSet(entry, true, prev.r, prev.g, prev.b)
+			swatch.tex:SetTexture(prev.r, prev.g, prev.b)
+		end
+		ColorPickerFrame.hasOpacity = false
+		ColorPickerFrame.previousValues = { r = r2, g = g2, b = b2 }
+		ColorPickerFrame:SetColorRGB(r2, g2, b2)
+		ShowUIPanel(ColorPickerFrame)
+	end)
+
+	return 24
+end
+
+local function RenderOptionsInto(parent, argsTable, yStart)
+	local sorted = {}
+	for k, v in pairs(argsTable) do
+		table.insert(sorted, { key = k, entry = v })
+	end
+	table.sort(sorted, function(a, b)
+		return (a.entry.order or 999) < (b.entry.order or 999)
+	end)
+
+	local y = yStart
+	for _, item in ipairs(sorted) do
+		local entry = item.entry
+		if (not entry.name or entry.name == "") and entry.type ~= "group" then
+			entry.name = item.key
+		end
+		if entry.type == "toggle" then
+			y = y - MakeToggleWidget(parent, entry, y)
+		elseif entry.type == "range" then
+			y = y - MakeRangeWidget(parent, entry, y)
+		elseif entry.type == "color" then
+			y = y - MakeColorWidget(parent, entry, y)
+		elseif entry.type == "header" then
+			y = y - MakeHeaderWidget(parent, entry.name or "", y)
+		elseif entry.type == "group" then
+			y = y - 8
+			y = y - MakeHeaderWidget(parent, "== " .. (entry.name or item.key) .. " ==", y)
+			if entry.args then
+				y = RenderOptionsInto(parent, entry.args, y)
+			end
+		end
+	end
+	return y
+end
+
+function ui.CreateSettingsWindow()
+	if settingsWindow then
+		return settingsWindow
+	end
+
+	local f = CreateFrame("Frame", "CursiveSettingsWindow", UIParent)
+	f:SetWidth(320)
+	f:SetHeight(480)
+	f:SetPoint("Center", UIParent, "Center", 0, 0)
+	f:SetBackdrop({
+		bgFile   = "Interface\\Buttons\\WHITE8X8",
+		edgeFile = "Interface\\Buttons\\WHITE8X8",
+		edgeSize = 1,
+		insets   = { left = 1, right = 1, top = 1, bottom = 1 }
+	})
+	f:SetBackdropColor(0.05, 0.05, 0.08, 0.95)
+	f:SetBackdropBorderColor(0.25, 0.25, 0.35, 1)
+	f:SetMovable(true)
+	f:EnableMouse(true)
+	f:RegisterForDrag("LeftButton")
+	f:SetScript("OnDragStart", function() this:StartMoving() end)
+	f:SetScript("OnDragStop", function() this:StopMovingOrSizing() end)
+	f:SetFrameStrata("DIALOG")
+	f:Hide()
+
+	local titleBar = CreateFrame("Frame", nil, f)
+	titleBar:SetHeight(24)
+	titleBar:SetPoint("TopLeft", f, "TopLeft", 0, 0)
+	titleBar:SetPoint("TopRight", f, "TopRight", 0, 0)
+	titleBar:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8" })
+	titleBar:SetBackdropColor(0.22, 0.08, 0.38, 1)
+
+	local title = titleBar:CreateFontString(nil, "OVERLAY")
+	title:SetFont(STANDARD_TEXT_FONT, 12, "OUTLINE")
+	title:SetTextColor(1, 0.84, 0, 1)
+	title:SetPoint("Left", titleBar, "Left", 8, 0)
+	title:SetText("Cursive — Settings")
+
+	local closeBtn = CreateFrame("Button", nil, titleBar)
+	closeBtn:SetWidth(16) closeBtn:SetHeight(16)
+	closeBtn:SetPoint("Right", titleBar, "Right", -6, 0)
+	local closeTxt = closeBtn:CreateFontString(nil, "OVERLAY")
+	closeTxt:SetFont(STANDARD_TEXT_FONT, 13, "OUTLINE")
+	closeTxt:SetAllPoints(closeBtn)
+	closeTxt:SetText("|cffaaaaaaX|r")
+	closeBtn:SetScript("OnEnter", function() closeTxt:SetText("|cffffffffX|r") end)
+	closeBtn:SetScript("OnLeave", function() closeTxt:SetText("|cffaaaaaaX|r") end)
+	closeBtn:SetScript("OnClick", function() f:Hide() end)
+
+	local scrollFrame = CreateFrame("ScrollFrame", "CursiveSettingsScrollFrame", f, "UIPanelScrollFrameTemplate")
+	scrollFrame:SetPoint("TopLeft", f, "TopLeft", 16, -32)
+	scrollFrame:SetPoint("BottomRight", f, "BottomRight", -32, 16)
+
+	local content = CreateFrame("Frame", nil, scrollFrame)
+	content:SetWidth(272)
+	content:SetHeight(1)
+	scrollFrame:SetScrollChild(content)
+
+	local finalY = RenderOptionsInto(content, Cursive.cmdtable.args, -4)
+	content:SetHeight(math.abs(finalY) + 30)
+
+	settingsWindow = f
+	return f
+end
 
 Cursive.ui = ui
