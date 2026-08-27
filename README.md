@@ -1,4 +1,15 @@
-# Cursive
+# Cursive updated for octowow
+
+-new settings menu
+
+-ghost dots icons
+
+-Shadow vulnerability icon
+
+-Global Cooldown bar
+
+<img width="1764" height="1080" alt="image" src="https://github.com/user-attachments/assets/30712479-d898-4e7d-9c13-94f700da2cbc" />
+
 
 > [!IMPORTANT]
 >
