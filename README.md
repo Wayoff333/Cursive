@@ -8,6 +8,11 @@
 
 -Global Cooldown bar
 
+-1.4 added sacrifice bar
+
+<img width="1631" height="1064" alt="image" src="https://github.com/user-attachments/assets/86281c6d-a178-4709-8e02-628c7f6219ba" />
+
+
 <img width="1764" height="1080" alt="image" src="https://github.com/user-attachments/assets/30712479-d898-4e7d-9c13-94f700da2cbc" />
 
 
