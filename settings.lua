@@ -19,6 +19,10 @@ Cursive:RegisterDefaults("profile", {
 	gcdbarheight = 3,
 	gcdbarwidth = 200,
 	gcdbarcolor = { r = 1, g = 0.85, b = 0.1 },
+	sacrificebarcolor = { r = 0.6, g = 0.2, b = 0.85 },
+	sacrificebarwidth = 200,
+	sacrificebarheight = 14,
+	sacrificebarorientation = "HORIZONTAL",
 	showghostcurse = true,
 	showghostcorruption = true,
 	showghostimmolate = true,
@@ -785,6 +789,90 @@ Cursive.cmdtable = {
 				Cursive.db.profile.gcdbarcolor.b = b
 				Cursive.UpdateFramesFromConfig()
 				Cursive.ui.PreviewGcdBar()
+			end,
+		},
+		["sacrificebarcolor"] = {
+			type = "color",
+			name = "Sacrifice Bar Color",
+			desc = "Color of the Sacrifice shield bar (drag the bar itself anywhere on screen to reposition it)",
+			order = 44,
+			get = function()
+				return Cursive.db.profile.sacrificebarcolor.r, Cursive.db.profile.sacrificebarcolor.g, Cursive.db.profile.sacrificebarcolor.b
+			end,
+			set = function(r, g, b)
+				Cursive.db.profile.sacrificebarcolor.r = r
+				Cursive.db.profile.sacrificebarcolor.g = g
+				Cursive.db.profile.sacrificebarcolor.b = b
+				if Cursive.ui.sacrificeBar then
+					Cursive.ui.sacrificeBar:SetStatusBarColor(r, g, b, 0.9)
+				end
+				Cursive.ui.PreviewSacrificeBar()
+			end,
+		},
+		["sacrificebarwidth"] = {
+			type = "range",
+			name = "Sacrifice Bar Width",
+			desc = "Width of the Sacrifice shield bar",
+			order = 45,
+			min = 80,
+			max = 400,
+			step = 5,
+			get = function()
+				return Cursive.db.profile.sacrificebarwidth
+			end,
+			set = function(v)
+				Cursive.db.profile.sacrificebarwidth = v
+				if Cursive.ui.sacrificeBar then
+					Cursive.ui.sacrificeBar:SetWidth(v)
+				end
+				Cursive.ui.PreviewSacrificeBar()
+			end,
+		},
+		["sacrificebarheight"] = {
+			type = "range",
+			name = "Sacrifice Bar Height",
+			desc = "Height of the Sacrifice shield bar",
+			order = 46,
+			min = 6,
+			max = 40,
+			step = 1,
+			get = function()
+				return Cursive.db.profile.sacrificebarheight
+			end,
+			set = function(v)
+				Cursive.db.profile.sacrificebarheight = v
+				if Cursive.ui.sacrificeBar then
+					Cursive.ui.sacrificeBar:SetHeight(v)
+				end
+				Cursive.ui.PreviewSacrificeBar()
+			end,
+		},
+		["sacrificebarvertical"] = {
+			type = "toggle",
+			name = "Sacrifice Bar Vertical",
+			desc = "Orient the Sacrifice bar vertically (fills top-to-bottom as it counts down) instead of horizontally. Swaps width/height so the bar's shape matches.",
+			order = 47,
+			get = function()
+				return Cursive.db.profile.sacrificebarorientation == "VERTICAL"
+			end,
+			set = function(v)
+				Cursive.db.profile.sacrificebarorientation = v and "VERTICAL" or "HORIZONTAL"
+
+				-- Swap width/height so the bar's shape actually matches its
+				-- orientation -- otherwise it just changes the internal
+				-- fill direction while staying the same wide-short shape.
+				local w = Cursive.db.profile.sacrificebarwidth
+				local h = Cursive.db.profile.sacrificebarheight
+				Cursive.db.profile.sacrificebarwidth = h
+				Cursive.db.profile.sacrificebarheight = w
+
+				if Cursive.ui.sacrificeBar then
+					Cursive.ui.sacrificeBar:SetOrientation(Cursive.db.profile.sacrificebarorientation)
+					Cursive.ui.sacrificeBar:SetWidth(Cursive.db.profile.sacrificebarwidth)
+					Cursive.ui.sacrificeBar:SetHeight(Cursive.db.profile.sacrificebarheight)
+					Cursive.ui.UpdateSacrificeBarTextLayout(Cursive.ui.sacrificeBar, v)
+				end
+				Cursive.ui.PreviewSacrificeBar()
 			end,
 		},
 		["clickthrough"] = {

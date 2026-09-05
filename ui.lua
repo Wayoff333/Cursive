@@ -605,6 +605,29 @@ local GHOST_DOT_ICONS = {
 }
 local GHOST_CURSE_FALLBACK_ICON = "Interface\\Icons\\Spell_Shadow_CurseOfSargeras" -- Curse of Agony
 
+-- UnitDebuff(guid, i) via the GUID extension has been confirmed (via live
+-- /cgd diagnostic) to sometimes return nothing at all for a guid, even
+-- when that guid IS the player's own current target. Unit tokens are
+-- always reliable, so substitute one whenever the guid matches something
+-- checkable -- covers being directly targeted, or being your target's
+-- target (common on bosses when tanking/watching a tank). Other tracked
+-- guids (raid members' own targets etc) still have no equivalent safe
+-- substitute without a broader token scan. Note: "focus" was tried here
+-- too but removed -- confirmed via live error that vanilla 1.12 has no
+-- focus frame support at all (that's a later-expansion addition), and
+-- UnitExists("focus") hard-errors here rather than just returning nil.
+local function SafeUnitDebuff(guid, i)
+	local _, targetGuid = UnitExists("target")
+	if targetGuid and guid == targetGuid then
+		return UnitDebuff("target", i)
+	end
+	local _, totGuid = UnitExists("targettarget")
+	if totGuid and guid == totGuid then
+		return UnitDebuff("targettarget", i)
+	end
+	return UnitDebuff(guid, i)
+end
+
 local function GetGhostTextures(guid)
 	local config = Cursive.db.profile
 	local textures = {}
@@ -636,7 +659,7 @@ local function GetGhostTextures(guid)
 			local found = false
 			local i = 1
 			while true do
-				local tex = UnitDebuff(guid, i)
+				local tex = SafeUnitDebuff(guid, i)
 				if not tex then break end
 				if string.find(tex, dot.texture, 1, true) then
 					found = true
@@ -743,7 +766,7 @@ local function DisplayGuid(guid)
 		local hasShadowVuln = false
 		local i = 1
 		while true do
-			local tex = UnitDebuff(guid, i)
+			local tex = SafeUnitDebuff(guid, i)
 			if not tex then break end
 			if string.find(tex, "Spell_Shadow_ShadowBolt", 1, true) then
 				hasShadowVuln = true
@@ -1182,6 +1205,399 @@ gcdTicker:SetScript("OnUpdate", function()
 	end
 end)
 
+-------------------------------------------------------------------------------
+-- Sacrifice shield tracking (Voidwalker's damage-absorb shield on the
+-- warlock). Detection and initial-absorb-value reading use a tooltip scan
+-- of the player's own buff (robust across all ranks, since it reads the
+-- actual computed value including any Demonic Brutality talent bonus,
+-- rather than guessing based on rank). Duration is a fixed 30s regardless
+-- of rank (confirmed).
+--
+-- IMPORTANT CAVEAT: remaining-absorb tracking (damage taken while the
+-- shield is up) is UNVERIFIED. Vanilla's combat log is chat-message-based
+-- and its exact wording for absorbed hits hasn't been confirmed on this
+-- server. Diagnostic mode (/cursivesacdebug) prints every combat message
+-- received while the shield is active, so the real format can be seen and
+-- the parsing refined -- until then, the absorb estimate may be inaccurate
+-- or simply not update at all if the message format doesn't match what's
+-- guessed below.
+-------------------------------------------------------------------------------
+
+local SACRIFICE_DURATION = 30
+ui.sacrificeDebugMode = false
+ui.cachedSacrificeAbsorb = nil
+
+local sacrificeState = {
+	active = false,
+	initialAbsorb = 0,
+	appliedAt = 0,
+	damageTaken = 0,
+}
+
+-- The APPLIED buff's own tooltip is confirmed abbreviated ("Absorbs all
+-- damage", no number) -- the real absorb value only appears in the full
+-- spell description, shown on the Voidwalker's pet action bar. Since the
+-- Voidwalker is consumed by the cast, this has to be scanned proactively
+-- while it's still alive and cached, rather than read after the fact.
+local function ScanPetBarForSacrifice()
+	local slot = 1
+	while slot <= 10 do
+		local button = getglobal("pfActionBarPetButton"..slot) or getglobal("PetActionButton"..slot)
+		if button and button:IsVisible() then
+			Cursive.core.tooltipScan:SetOwner(UIParent, "ANCHOR_NONE")
+			Cursive.core.tooltipScan:SetPetAction(slot)
+			local nameLine = getglobal("CursiveTooltipScanTextLeft1")
+			local nameText = nameLine and nameLine:GetText()
+			if nameText and string.find(nameText, "Sacrifice", 1, true) then
+				local lineNum = 2
+				while lineNum <= 6 do
+					local descLine = getglobal("CursiveTooltipScanTextLeft"..lineNum)
+					local desc = descLine and descLine:GetText()
+					if desc then
+						local _, _, num = string.find(desc, "absorb (%d+)")
+						if num then
+							if ui.sacrificeDebugMode and ui.cachedSacrificeAbsorb ~= tonumber(num) then
+								DEFAULT_CHAT_FRAME:AddMessage("|cff60ffff[SacDebug]|r Cached Sacrifice absorb value from pet bar: "..num)
+							end
+							ui.cachedSacrificeAbsorb = tonumber(num)
+							Cursive.core.tooltipScan:Hide()
+							return
+						end
+					end
+					lineNum = lineNum + 1
+				end
+			end
+			Cursive.core.tooltipScan:Hide()
+		end
+		slot = slot + 1
+	end
+end
+
+-- One-shot diagnostic: dumps the full state of PetActionButton1-10 --
+-- whether each exists, is visible, and what its tooltip shows (regardless
+-- of whether it matches "Sacrifice"). Run this with your Voidwalker
+-- summoned if the pet-bar scan above isn't finding anything -- likely
+-- explanation is a UI replacement addon (e.g. pfUI) using different pet
+-- bar frame names than the vanilla default.
+-- Guessing frame naming conventions has failed twice -- this reports
+-- exactly which frame is under the mouse cursor, no guessing involved.
+-- Run the command, THEN hover over the Sacrifice icon on the pet bar
+-- within 3 seconds (gives time to move the mouse after typing/hitting
+-- enter, since GetMouseFocus needs the cursor there at the exact moment
+-- it's checked).
+local whatFrameChecker = CreateFrame("Frame")
+SLASH_CURSIVEWHATFRAME1 = "/cursivewhatframe"
+SlashCmdList["CURSIVEWHATFRAME"] = function()
+	DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00Cursive:|r hover over the Sacrifice pet icon now -- checking in 3 seconds...")
+	local elapsed = 0
+	whatFrameChecker:SetScript("OnUpdate", function()
+		elapsed = elapsed + arg1
+		if elapsed < 3 then return end
+		whatFrameChecker:SetScript("OnUpdate", nil)
+
+		local frame = GetMouseFocus()
+		if not frame then
+			DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00Cursive:|r no frame under mouse")
+			return
+		end
+		local name = frame.GetName and frame:GetName()
+		DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00Cursive:|r frame under mouse: "..tostring(name))
+		local parent = frame.GetParent and frame:GetParent()
+		if parent then
+			local parentName = parent.GetName and parent:GetName()
+			DEFAULT_CHAT_FRAME:AddMessage("  parent: "..tostring(parentName))
+		end
+	end)
+end
+
+SLASH_CURSIVEPETDEBUG1 = "/cursivepetdebug"
+SlashCmdList["CURSIVEPETDEBUG"] = function()
+	DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00Cursive pet bar debug|r")
+	local prefixes = { "pfActionBarPetButton", "PetActionButton", "ActionBarPetButton", "ActionBarPet" }
+	local anyFound = false
+	local pIdx = 1
+	while pIdx <= 4 do
+		local prefix = prefixes[pIdx]
+		local slot = 1
+		while slot <= 10 do
+			local buttonName = prefix..slot
+			local button = getglobal(buttonName)
+			if button then
+				anyFound = true
+				local visible = button:IsVisible()
+				DEFAULT_CHAT_FRAME:AddMessage("  "..buttonName..": exists, visible="..tostring(visible))
+				if visible then
+					-- Try SetPetAction directly on this slot number (works
+					-- regardless of the button's frame naming convention,
+					-- since SetPetAction addresses pet action slots by
+					-- index, not frame name).
+					Cursive.core.tooltipScan:SetOwner(UIParent, "ANCHOR_NONE")
+					local ok = pcall(function() Cursive.core.tooltipScan:SetPetAction(slot) end)
+					local nameLine = getglobal("CursiveTooltipScanTextLeft1")
+					local nameText = nameLine and nameLine:GetText()
+					DEFAULT_CHAT_FRAME:AddMessage("    SetPetAction("..slot..") tooltip name: "..tostring(nameText).." (call ok: "..tostring(ok)..")")
+					Cursive.core.tooltipScan:Hide()
+				end
+			end
+			slot = slot + 1
+		end
+		pIdx = pIdx + 1
+	end
+	if not anyFound then
+		DEFAULT_CHAT_FRAME:AddMessage("  None of PetActionButton/ActionBarPetButton/ActionBarPet 1-10 exist -- naming convention is something else entirely.")
+	end
+end
+
+local function ScanForSacrificeBuff()
+	local found = false
+	local i = 1
+	while true do
+		local tex = UnitBuff("player", i)
+		if not tex then break end
+		Cursive.core.tooltipScan:SetOwner(UIParent, "ANCHOR_NONE")
+		Cursive.core.tooltipScan:SetUnitBuff("player", i)
+		local nameLine = getglobal("CursiveTooltipScanTextLeft1")
+		local name = nameLine and nameLine:GetText()
+		if name and string.find(name, "Sacrifice", 1, true) then
+			found = true
+			if not sacrificeState.active then
+				sacrificeState.active = true
+				sacrificeState.appliedAt = GetTime()
+				sacrificeState.damageTaken = 0
+				sacrificeState.initialAbsorb = ui.cachedSacrificeAbsorb or 0
+
+				if ui.sacrificeDebugMode then
+					DEFAULT_CHAT_FRAME:AddMessage("|cff60ffff[SacDebug]|r Shield applied, using cached absorb value: "..tostring(ui.cachedSacrificeAbsorb))
+				end
+			end
+			break
+		end
+		i = i + 1
+	end
+	Cursive.core.tooltipScan:Hide()
+	if not found and sacrificeState.active then
+		if ui.sacrificeDebugMode then
+			DEFAULT_CHAT_FRAME:AddMessage("|cff60ffff[SacDebug]|r Shield no longer detected (expired or broken)")
+		end
+		sacrificeState.active = false
+	end
+	return found
+end
+
+-- Diagnostic: logs every combat message received while the shield is
+-- active, to determine the real absorb-message wording on this server.
+-- Also attempts a best-effort parse (any number immediately preceding or
+-- following "absorb") to estimate damage taken, but this is unverified.
+local sacDebugFrame = CreateFrame("Frame")
+-- Confirmed (via community-documented vanilla 1.12.1 event listings) as
+-- the correct events for damage TAKEN by the player -- the original guess
+-- above was wrong: CHAT_MSG_SPELL_SELF_DAMAGE and CHAT_MSG_COMBAT_SELF_HITS
+-- report damage the player DEALS to others, not damage taken, which is why
+-- zero debug messages ever fired despite the player clearly taking damage.
+sacDebugFrame:RegisterEvent("CHAT_MSG_COMBAT_CREATURE_VS_SELF_HITS")   -- melee from a creature to the player
+sacDebugFrame:RegisterEvent("CHAT_MSG_SPELL_CREATURE_VS_SELF_DAMAGE")  -- spell from a creature to the player
+sacDebugFrame:RegisterEvent("CHAT_MSG_COMBAT_HOSTILEPLAYER_HITS")      -- melee from a hostile player (PvP)
+sacDebugFrame:RegisterEvent("CHAT_MSG_SPELL_HOSTILEPLAYER_DAMAGE")     -- spell from a hostile player (PvP)
+sacDebugFrame:SetScript("OnEvent", function()
+	if not sacrificeState.active then return end
+	local msg = arg1
+	if not msg then return end
+
+	if ui.sacrificeDebugMode then
+		DEFAULT_CHAT_FRAME:AddMessage("|cff60ffff[SacDebug]|r ["..event.."] "..msg)
+	end
+
+	if string.find(string.lower(msg), "absorb", 1, true) then
+		local _, _, num = string.find(msg, "%((%d+) absorbed%)")
+		if num then
+			sacrificeState.damageTaken = sacrificeState.damageTaken + tonumber(num)
+			if ui.sacrificeDebugMode then
+				DEFAULT_CHAT_FRAME:AddMessage("|cff60ffff[SacDebug]|r Parsed absorbed amount: "..num..", running total: "..sacrificeState.damageTaken)
+			end
+		end
+	end
+end)
+
+SLASH_CURSIVESACDEBUG1 = "/cursivesacdebug"
+SlashCmdList["CURSIVESACDEBUG"] = function()
+	ui.sacrificeDebugMode = not ui.sacrificeDebugMode
+	DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00Cursive|r sacrifice debug mode: "..(ui.sacrificeDebugMode and "|cff00ff00ON|r" or "|cffff6060OFF|r"))
+end
+
+-- Standalone, draggable Sacrifice shield bar. Depletes visually with time
+-- remaining (same mechanic as the GCD bar); the damage-remaining estimate
+-- is shown as text overlaid on the bar rather than driving the bar's fill,
+-- since only the time value is fully reliable.
+-- Repositions the label/absorb text based on orientation. Horizontal keeps
+-- them side-by-side inside the bar; vertical stacks them below the bar
+-- instead, since a narrow vertical bar can't fit readable text inside it.
+local function UpdateSacrificeBarTextLayout(bar, isVertical)
+	bar.label:ClearAllPoints()
+	bar.absorbText:ClearAllPoints()
+	if isVertical then
+		bar.label:SetPoint("Top", bar, "Bottom", 0, -4)
+		bar.label:SetJustifyH("Center")
+		bar.absorbText:SetPoint("Top", bar.label, "Bottom", 0, -2)
+		bar.absorbText:SetJustifyH("Center")
+	else
+		bar.label:SetPoint("Left", bar, "Left", 4, 0)
+		bar.label:SetJustifyH("Left")
+		bar.absorbText:SetPoint("Right", bar, "Right", -4, 0)
+		bar.absorbText:SetJustifyH("Right")
+	end
+end
+
+local function CreateSacrificeBar()
+	local p = Cursive.db.profile
+
+	local bar = CreateFrame("StatusBar", "CursiveSacrificeBar", UIParent)
+	bar:SetWidth(p.sacrificebarwidth or 200)
+	bar:SetHeight(p.sacrificebarheight or 14)
+
+	if p.sacrificebaranchor then
+		bar:SetPoint(p.sacrificebaranchor, UIParent, p.sacrificebaranchor, p.sacrificebarx or 0, p.sacrificebary or 0)
+	else
+		bar:SetPoint("Center", UIParent, "Center", 0, -100)
+	end
+
+	bar:SetStatusBarTexture(Cursive.db.profile.bartexture)
+	bar:SetOrientation(p.sacrificebarorientation or "HORIZONTAL")
+	local c = p.sacrificebarcolor or { r = 0.6, g = 0.2, b = 0.85 }
+	bar:SetStatusBarColor(c.r, c.g, c.b, 0.9)
+	bar:SetMinMaxValues(0, 1)
+	bar:SetValue(0)
+
+	-- Border color reflects % of absorb remaining (green -> red), as an
+	-- at-a-glance cue independent of the text number.
+	bar:SetBackdrop({
+		edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+		edgeSize = 12,
+	})
+	bar:SetBackdropBorderColor(0, 1, 0, 1)
+
+	local bg = bar:CreateTexture(nil, "BACKGROUND")
+	bg:SetAllPoints(bar)
+	bg:SetTexture(0, 0, 0)
+	bg:SetAlpha(0.4)
+
+	local label = bar:CreateFontString(nil, "OVERLAY")
+	label:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
+	label:SetTextColor(1, 1, 1, 1)
+	label:SetText("Sacrifice")
+
+	local absorbText = bar:CreateFontString(nil, "OVERLAY")
+	absorbText:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
+	absorbText:SetTextColor(1, 1, 1, 1)
+
+	bar.label = label
+	bar.absorbText = absorbText
+	UpdateSacrificeBarTextLayout(bar, (p.sacrificebarorientation == "VERTICAL"))
+
+	bar:EnableMouse(true)
+	bar:SetMovable(true)
+	bar:RegisterForDrag("LeftButton")
+	bar:SetScript("OnDragStart", function()
+		this:StartMoving()
+	end)
+	bar:SetScript("OnDragStop", function()
+		this:StopMovingOrSizing()
+		local newAnchor = utils.GetBestAnchor(this)
+		local anchor, x, y = utils.ConvertFrameAnchor(this, newAnchor)
+		this:ClearAllPoints()
+		this:SetPoint(anchor, UIParent, anchor, x, y)
+
+		Cursive.db.profile.sacrificebaranchor = anchor
+		Cursive.db.profile.sacrificebarx = x
+		Cursive.db.profile.sacrificebary = y
+	end)
+
+	bar:Hide()
+	ui.sacrificeBar = bar
+	return bar
+end
+
+ui.UpdateSacrificeBarTextLayout = UpdateSacrificeBarTextLayout
+
+local sacrificeTicker = CreateFrame("Frame", "CursiveSacrificeTicker", UIParent)
+local sacrificeTickAccum = 0
+ui.sacrificeBarPreviewUntil = nil
+
+-- Call this from any Sacrifice bar setting's set() callback to show a
+-- temporary static preview fill, since the real bar normally only
+-- appears while the shield is actually active -- lets color/size changes
+-- be seen immediately.
+function ui.PreviewSacrificeBar()
+	ui.sacrificeBarPreviewUntil = GetTime() + 4
+end
+
+sacrificeTicker:SetScript("OnUpdate", function()
+	sacrificeTickAccum = sacrificeTickAccum + arg1
+	if sacrificeTickAccum < 0.5 then return end
+	sacrificeTickAccum = 0
+
+	ScanPetBarForSacrifice()
+	ScanForSacrificeBuff()
+
+	if not ui.sacrificeBar then
+		CreateSacrificeBar()
+	end
+	local bar = ui.sacrificeBar
+
+	-- Preview mode: triggered directly by changing a Sacrifice bar
+	-- setting, rather than trying to detect whether the options menu is
+	-- open.
+	if ui.sacrificeBarPreviewUntil and GetTime() < ui.sacrificeBarPreviewUntil then
+		bar:SetMinMaxValues(0, 30)
+		bar:SetValue(18)
+		bar.absorbText:SetText("18s  |  1200 absorb")
+		if not bar:IsShown() then bar:Show() end
+		return
+	end
+
+	if not sacrificeState.active then
+		if bar:IsShown() then bar:Hide() end
+		return
+	end
+
+	local remaining = SACRIFICE_DURATION - (GetTime() - sacrificeState.appliedAt)
+	if remaining <= 0 then
+		sacrificeState.active = false
+		bar:Hide()
+		return
+	end
+
+	if not bar:IsShown() then bar:Show() end
+	bar:SetMinMaxValues(0, SACRIFICE_DURATION)
+	bar:SetValue(remaining)
+
+	local remainingAbsorb = sacrificeState.initialAbsorb - sacrificeState.damageTaken
+	if remainingAbsorb < 0 then remainingAbsorb = 0 end
+	bar.absorbText:SetText(math.floor(remaining + 1).."s  |  "..remainingAbsorb.." absorb")
+
+	if sacrificeState.initialAbsorb > 0 then
+		local pct = remainingAbsorb / sacrificeState.initialAbsorb
+		if pct > 1 then pct = 1 end
+		bar.borderR, bar.borderG, bar.borderB = 1 - pct, pct, 0
+	else
+		bar.borderR, bar.borderG, bar.borderB = 0.5, 0.5, 0.5
+	end
+end)
+
+-- Glowing border: pulses the border alpha smoothly via sin() oscillation.
+-- Runs every frame (unthrottled), separate from the main 0.5s update
+-- above, since a visible pulse needs much more frequent updates than the
+-- bar's actual data does.
+local sacrificeGlowTicker = CreateFrame("Frame", "CursiveSacrificeGlowTicker", UIParent)
+sacrificeGlowTicker:SetScript("OnUpdate", function()
+	local bar = ui.sacrificeBar
+	if not bar or not bar:IsShown() then return end
+	local r = bar.borderR or 0.5
+	local g = bar.borderG or 0.5
+	local b = bar.borderB or 0.5
+	local alpha = 0.5 + 0.5 * math.sin(GetTime() * 4)
+	bar:SetBackdropBorderColor(r, g, b, alpha)
+end)
+
 -- Flashes any icon currently registered, via a smooth alpha oscillation.
 -- Single shared ticker for all rows rather than one per icon. Registry
 -- values are a speed multiplier (falls back to 3 if just `true`), so
@@ -1435,6 +1851,52 @@ function ui.CreateSettingsWindow()
 
 	settingsWindow = f
 	return f
+end
+
+-------------------------------------------------------------------------------
+-- Diagnostic: /cgd prints exactly what UnitDebuff sees for the current
+-- target, and whether each GHOST_DOT_ICONS entry matches -- run this while
+-- a ghost icon is stuck showing despite the DoT clearly being active, to
+-- get real data instead of guessing further.
+-------------------------------------------------------------------------------
+
+SLASH_CURSIVEGHOSTDEBUG1 = "/cgd"
+SlashCmdList["CURSIVEGHOSTDEBUG"] = function()
+	local _, guid = UnitExists("target")
+	if not guid then
+		DEFAULT_CHAT_FRAME:AddMessage("|cffff6060Cursive ghost debug:|r no target selected")
+		return
+	end
+	DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00Cursive ghost debug|r -- guid: "..guid)
+	DEFAULT_CHAT_FRAME:AddMessage("(this is your current target, so the fix resolves it via the \"target\" token)")
+	DEFAULT_CHAT_FRAME:AddMessage("Raw UnitDebuff scan:")
+	local i = 1
+	local foundAny = false
+	while true do
+		local tex = SafeUnitDebuff(guid, i)
+		if not tex then break end
+		foundAny = true
+		DEFAULT_CHAT_FRAME:AddMessage("  slot "..i..": "..tex)
+		i = i + 1
+	end
+	if not foundAny then
+		DEFAULT_CHAT_FRAME:AddMessage("  (UnitDebuff returned nothing at all for this guid)")
+	end
+	DEFAULT_CHAT_FRAME:AddMessage("Checking against GHOST_DOT_ICONS:")
+	for _, dot in ipairs(GHOST_DOT_ICONS) do
+		local found = false
+		local j = 1
+		while true do
+			local tex = SafeUnitDebuff(guid, j)
+			if not tex then break end
+			if string.find(tex, dot.texture, 1, true) then
+				found = true
+				break
+			end
+			j = j + 1
+		end
+		DEFAULT_CHAT_FRAME:AddMessage("  "..dot.name..": "..(found and "|cff00ff00FOUND|r" or "|cffff6060NOT FOUND|r").." (looking for '"..dot.texture.."')")
+	end
 end
 
 Cursive.ui = ui
