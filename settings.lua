@@ -23,6 +23,7 @@ Cursive:RegisterDefaults("profile", {
 	sacrificebarwidth = 200,
 	sacrificebarheight = 14,
 	sacrificebarorientation = "HORIZONTAL",
+	uifont = "Fonts\\FRIZQT__.TTF",
 	showghostcurse = true,
 	showghostcorruption = true,
 	showghostimmolate = true,
@@ -708,6 +709,43 @@ Cursive.cmdtable = {
 					Cursive.core.enable()
 				else
 					Cursive.core.disable()
+				end
+			end,
+		},
+		["uifont"] = {
+			type = "select",
+			name = "Font",
+			desc = "Font used for unit row text, curse/timer numbers, and the Sacrifice bar (click to cycle through options). Preview below updates live.",
+			order = -100,
+			options = {
+				{ label = "Friz Quadrata (Default)", value = "Fonts\\FRIZQT__.TTF" },
+				{ label = "Arial Narrow", value = "Fonts\\ARIALN.TTF" },
+				{ label = "Morpheus", value = "Fonts\\MORPHEUS.TTF" },
+				{ label = "Skurri", value = "Fonts\\SKURRI.TTF" },
+				{ label = "Adobe Blank", value = "Interface\\AddOns\\pfUI\\fonts\\AdobeBlank.ttf" },
+				{ label = "Big Noodle Titling", value = "Interface\\AddOns\\pfUI\\fonts\\BigNoodleTitling.ttf" },
+				{ label = "Continuum", value = "Interface\\AddOns\\pfUI\\fonts\\Continuum.ttf" },
+				{ label = "Die Die Die", value = "Interface\\AddOns\\pfUI\\fonts\\DieDieDie.ttf" },
+				{ label = "Expressway", value = "Interface\\AddOns\\pfUI\\fonts\\Expressway.ttf" },
+				{ label = "Homespun", value = "Interface\\AddOns\\pfUI\\fonts\\Homespun.ttf" },
+				{ label = "Hooge", value = "Interface\\AddOns\\pfUI\\fonts\\Hooge.ttf" },
+				{ label = "Myriad Pro", value = "Interface\\AddOns\\pfUI\\fonts\\Myriad-Pro.ttf" },
+				{ label = "PT Sans Narrow Bold", value = "Interface\\AddOns\\pfUI\\fonts\\PT-Sans-Narrow-Bold.ttf" },
+				{ label = "PT Sans Narrow", value = "Interface\\AddOns\\pfUI\\fonts\\PT-Sans-Narrow-Regular.ttf" },
+				{ label = "Roboto Mono", value = "Interface\\AddOns\\pfUI\\fonts\\RobotoMono.ttf" },
+			},
+			get = function()
+				return Cursive.db.profile.uifont
+			end,
+			set = function(v)
+				Cursive.db.profile.uifont = v
+				Cursive.UpdateFramesFromConfig()
+				if Cursive.ui.sacrificeBar then
+					Cursive.ui.SafeSetFont(Cursive.ui.sacrificeBar.label, v, 10, "OUTLINE")
+					Cursive.ui.SafeSetFont(Cursive.ui.sacrificeBar.absorbText, v, 10, "OUTLINE")
+				end
+				if Cursive.ui.UpdateFontPreview then
+					Cursive.ui.UpdateFontPreview(v)
 				end
 			end,
 		},

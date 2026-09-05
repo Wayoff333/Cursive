@@ -8,6 +8,39 @@ local utils = Cursive.utils
 local filter = Cursive.filter
 
 local ui = CreateFrame("Frame", "CursiveUI", UIParent)
+
+-- User-selectable font for the actual display elements (unit row text,
+-- curse/shadow-vuln timers, Sacrifice bar). Falls back to the default if
+-- unset (e.g. existing profiles upgrading without this setting yet).
+local function GetUIFont()
+	return (Cursive.db.profile.uifont) or STANDARD_TEXT_FONT
+end
+
+-- SetFont returns a success boolean -- if a font fails to load (missing
+-- file, unsupported format, etc), fall back to the standard font rather
+-- than leaving the FontString with no font set at all, which throws a
+-- hard error on the next SetText call (confirmed cause of a full addon
+-- crash earlier this session).
+ui.fontDebugMode = false
+
+local function SafeSetFont(fontString, fontPath, size, flags)
+	local ok = fontString:SetFont(fontPath, size, flags)
+	if not ok then
+		if ui.fontDebugMode then
+			DEFAULT_CHAT_FRAME:AddMessage("|cffff6060[FontDebug]|r FAILED to load: "..tostring(fontPath))
+		end
+		fontString:SetFont(STANDARD_TEXT_FONT, size, flags)
+	elseif ui.fontDebugMode then
+		DEFAULT_CHAT_FRAME:AddMessage("|cff60ff60[FontDebug]|r Loaded OK: "..tostring(fontPath))
+	end
+end
+ui.SafeSetFont = SafeSetFont
+
+SLASH_CURSIVEFONTDEBUG1 = "/cursivefontdebug"
+SlashCmdList["CURSIVEFONTDEBUG"] = function()
+	ui.fontDebugMode = not ui.fontDebugMode
+	DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00Cursive|r font debug mode: "..(ui.fontDebugMode and "|cff00ff00ON|r" or "|cffff6060OFF|r"))
+end
 -- Empirically-adjusted duration for the Shadow Vulnerability local
 -- countdown timer -- see comment at its usage for why this isn't 12s.
 local SHADOW_VULN_DURATION = 9
@@ -92,7 +125,7 @@ local function UpdateRootBarFrame()
 
 	ui.rootBarFrame:SetScale(config.scale)
 
-	ui.rootBarFrame.caption:SetFont(STANDARD_TEXT_FONT, Cursive.db.profile.textsize, "THINOUTLINE")
+	SafeSetFont(ui.rootBarFrame.caption, GetUIFont(), Cursive.db.profile.textsize, "THINOUTLINE")
 	ui.rootBarFrame.caption:SetText(Cursive.db.profile.caption)
 	if Cursive.db.profile.showtitle then
 		ui.rootBarFrame.caption:Show()
@@ -418,7 +451,7 @@ local function CreateBarSecondSection(unitFrame, guid)
 		hp:SetPoint("TOPRIGHT", healthBar, "TOPRIGHT", -2, -2)
 		hp:SetWidth(30)
 		hp:SetHeight(config.height - 4)
-		hp:SetFont(STANDARD_TEXT_FONT, config.textsize, "THINOUTLINE")
+		SafeSetFont(hp, GetUIFont(), config.textsize, "THINOUTLINE")
 		hp:SetJustifyH("RIGHT")
 		unitFrame.hpText = hp
 
@@ -426,7 +459,7 @@ local function CreateBarSecondSection(unitFrame, guid)
 			local name = healthBar:CreateFontString(nil, "HIGH", "GameFontWhite")
 			name:SetPoint("TOPLEFT", healthBar, "TOPLEFT", 2, -2)
 			name:SetPoint("BOTTOMRIGHT", hp, "BOTTOMLEFT", 2, 0)
-			name:SetFont(STANDARD_TEXT_FONT, config.textsize, "THINOUTLINE")
+			SafeSetFont(name, GetUIFont(), config.textsize, "THINOUTLINE")
 			name:SetJustifyH("LEFT")
 			unitFrame.nameText = name
 		end
@@ -451,7 +484,7 @@ local function CreateBarSecondSection(unitFrame, guid)
 			local name = secondSection:CreateFontString(nil, "HIGH", "GameFontWhite")
 			name:SetPoint("TOPLEFT", secondSection, "TOPLEFT", 2, -2)
 			name:SetPoint("BOTTOMRIGHT", secondSection, "BOTTOMRIGHT", 2, 0)
-			name:SetFont(STANDARD_TEXT_FONT, config.textsize, "THINOUTLINE")
+			SafeSetFont(name, GetUIFont(), config.textsize, "THINOUTLINE")
 			name:SetWidth(config.healthwidth)
 			name:SetHeight(config.height - 4)
 			name:SetJustifyH("LEFT")
@@ -495,7 +528,7 @@ local function CreateBarThirdSection(unitFrame, guid)
 
 		curse.timer = thirdSection:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 		curse.timer:SetFontObject(GameFontHighlight)
-		curse.timer:SetFont(STANDARD_TEXT_FONT, config.cursetimersize, "OUTLINE")
+		SafeSetFont(curse.timer, GetUIFont(), config.cursetimersize, "OUTLINE")
 		curse.timer:SetTextColor(1, 1, 1)
 		curse.timer:SetAllPoints(curse)
 
@@ -530,7 +563,7 @@ local function CreateBarThirdSection(unitFrame, guid)
 
 	shadowVulnIcon.timer = thirdSection:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	shadowVulnIcon.timer:SetFontObject(GameFontHighlight)
-	shadowVulnIcon.timer:SetFont(STANDARD_TEXT_FONT, config.cursetimersize, "OUTLINE")
+	SafeSetFont(shadowVulnIcon.timer, GetUIFont(), config.cursetimersize, "OUTLINE")
 	shadowVulnIcon.timer:SetTextColor(1, 1, 1)
 	shadowVulnIcon.timer:SetAllPoints(shadowVulnIcon)
 	shadowVulnIcon.timer:Hide()
@@ -1481,12 +1514,12 @@ local function CreateSacrificeBar()
 	bg:SetAlpha(0.4)
 
 	local label = bar:CreateFontString(nil, "OVERLAY")
-	label:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
+	SafeSetFont(label, GetUIFont(), 10, "OUTLINE")
 	label:SetTextColor(1, 1, 1, 1)
 	label:SetText("Sacrifice")
 
 	local absorbText = bar:CreateFontString(nil, "OVERLAY")
-	absorbText:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
+	SafeSetFont(absorbText, GetUIFont(), 10, "OUTLINE")
 	absorbText:SetTextColor(1, 1, 1, 1)
 
 	bar.label = label
@@ -1754,6 +1787,124 @@ local function MakeColorWidget(parent, entry, yOff)
 	return 24
 end
 
+-- Cycle-button widget for choosing among a fixed list of options. Entry
+-- format: { type="select", name="...", options={ {label="...", value="..."}, ... },
+-- get=function() return currentValue end, set=function(value) ... end }
+local function MakeSelectWidget(parent, entry, yOff)
+	local label = parent:CreateFontString(nil, "OVERLAY")
+	label:SetFont(STANDARD_TEXT_FONT, 10, "")
+	label:SetTextColor(0.9, 0.9, 0.9, 1)
+	label:SetPoint("TopLeft", parent, "TopLeft", 8, yOff)
+	label:SetText(entry.name or "")
+
+	local btn = CreateFrame("Button", nil, parent)
+	btn:SetWidth(150) btn:SetHeight(20)
+	btn:SetPoint("TopRight", parent, "TopRight", -8, yOff)
+	btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+	local btnBg = btn:CreateTexture(nil, "BACKGROUND")
+	btnBg:SetAllPoints(btn)
+	btnBg:SetTexture(0.15, 0.15, 0.22)
+	local btnText = btn:CreateFontString(nil, "OVERLAY")
+	btnText:SetFont(STANDARD_TEXT_FONT, 9, "")
+	btnText:SetAllPoints(btn)
+	btnText:SetJustifyH("Center")
+	btnText:SetTextColor(0.8, 0.9, 1, 1)
+
+	local function FindLabel(val)
+		local i = 1
+		while i <= table.getn(entry.options) do
+			if entry.options[i].value == val then
+				return entry.options[i].label
+			end
+			i = i + 1
+		end
+		return tostring(val)
+	end
+	btnText:SetText(FindLabel(CallGetSet(entry, false)))
+
+	local dropdown = nil
+
+	local function CreateDropdown()
+		local dd = CreateFrame("Frame", nil, UIParent)
+		dd:SetWidth(150)
+		dd:SetHeight(table.getn(entry.options) * 16 + 4)
+		dd:SetPoint("TopLeft", btn, "BottomLeft", 0, -2)
+		dd:SetFrameStrata("TOOLTIP")
+		dd:SetBackdrop({
+			bgFile   = "Interface\\Buttons\\WHITE8X8",
+			edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+			edgeSize = 8,
+		})
+		dd:SetBackdropColor(0.05, 0.05, 0.08, 0.98)
+		dd:SetBackdropBorderColor(0.3, 0.3, 0.4, 1)
+		dd:Hide()
+
+		local i = 1
+		while i <= table.getn(entry.options) do
+			local opt = entry.options[i]
+			local row = CreateFrame("Button", nil, dd)
+			row:SetWidth(146) row:SetHeight(16)
+			row:SetPoint("TopLeft", dd, "TopLeft", 2, -2 - (i - 1) * 16)
+			row:RegisterForClicks("LeftButtonUp")
+
+			local rowHighlight = row:CreateTexture(nil, "HIGHLIGHT")
+			rowHighlight:SetAllPoints(row)
+			rowHighlight:SetTexture(0.35, 0.35, 0.55)
+			rowHighlight:SetBlendMode("ADD")
+
+			local rowText = row:CreateFontString(nil, "OVERLAY")
+			rowText:SetFont(STANDARD_TEXT_FONT, 9, "")
+			rowText:SetAllPoints(row)
+			rowText:SetJustifyH("Left")
+			rowText:SetTextColor(0.85, 0.85, 0.9, 1)
+			rowText:SetText(opt.label)
+
+			row:SetScript("OnClick", function()
+				CallGetSet(entry, true, opt.value)
+				btnText:SetText(opt.label)
+				dd:Hide()
+			end)
+
+			i = i + 1
+		end
+
+		return dd
+	end
+
+	btn:SetScript("OnClick", function()
+		if arg1 == "RightButton" then
+			-- Right-click: cycle to the next option
+			local val = CallGetSet(entry, false)
+			local idx = 1
+			local i = 1
+			while i <= table.getn(entry.options) do
+				if entry.options[i].value == val then
+					idx = i
+					break
+				end
+				i = i + 1
+			end
+			local nextIdx = idx + 1
+			if nextIdx > table.getn(entry.options) then nextIdx = 1 end
+			local nextOpt = entry.options[nextIdx]
+			CallGetSet(entry, true, nextOpt.value)
+			btnText:SetText(nextOpt.label)
+		else
+			-- Left-click: toggle a dropdown listing every option directly
+			if not dropdown then
+				dropdown = CreateDropdown()
+			end
+			if dropdown:IsShown() then
+				dropdown:Hide()
+			else
+				dropdown:Show()
+			end
+		end
+	end)
+
+	return 24
+end
+
 local function RenderOptionsInto(parent, argsTable, yStart)
 	local sorted = {}
 	for k, v in pairs(argsTable) do
@@ -1775,6 +1926,8 @@ local function RenderOptionsInto(parent, argsTable, yStart)
 			y = y - MakeRangeWidget(parent, entry, y)
 		elseif entry.type == "color" then
 			y = y - MakeColorWidget(parent, entry, y)
+		elseif entry.type == "select" then
+			y = y - MakeSelectWidget(parent, entry, y)
 		elseif entry.type == "header" then
 			y = y - MakeHeaderWidget(parent, entry.name or "", y)
 		elseif entry.type == "group" then
@@ -1824,7 +1977,8 @@ function ui.CreateSettingsWindow()
 	title:SetFont(STANDARD_TEXT_FONT, 12, "OUTLINE")
 	title:SetTextColor(1, 0.84, 0, 1)
 	title:SetPoint("Left", titleBar, "Left", 8, 0)
-	title:SetText("Cursive — Settings")
+	local versionStr = GetAddOnMetadata("Cursive", "Version") or "?"
+	title:SetText("Cursive — Settings (v"..versionStr..")")
 
 	local closeBtn = CreateFrame("Button", nil, titleBar)
 	closeBtn:SetWidth(16) closeBtn:SetHeight(16)
@@ -1837,8 +1991,61 @@ function ui.CreateSettingsWindow()
 	closeBtn:SetScript("OnLeave", function() closeTxt:SetText("|cffaaaaaaX|r") end)
 	closeBtn:SetScript("OnClick", function() f:Hide() end)
 
+	-- Live font preview: sample versions of the main bar text elements
+	-- (unit row name/hp, curse timer, Sacrifice bar text), so a font
+	-- change can be seen immediately without needing an active
+	-- target/shield to test against.
+	local previewSection = CreateFrame("Frame", nil, f)
+	previewSection:SetHeight(78)
+	previewSection:SetPoint("TopLeft", f, "TopLeft", 16, -30)
+	previewSection:SetPoint("TopRight", f, "TopRight", -16, -30)
+	previewSection:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8" })
+	previewSection:SetBackdropColor(0.02, 0.02, 0.04, 0.6)
+
+	local previewLabel = previewSection:CreateFontString(nil, "OVERLAY")
+	previewLabel:SetFont(STANDARD_TEXT_FONT, 9, "")
+	previewLabel:SetTextColor(0.6, 0.6, 0.65, 1)
+	previewLabel:SetPoint("TopLeft", previewSection, "TopLeft", 4, -2)
+	previewLabel:SetText("Font Preview")
+
+	local previewName = previewSection:CreateFontString(nil, "OVERLAY")
+	SafeSetFont(previewName, GetUIFont(), 12, "THINOUTLINE")
+	previewName:SetTextColor(1, 1, 1, 1)
+	previewName:SetPoint("TopLeft", previewSection, "TopLeft", 4, -16)
+	previewName:SetJustifyH("Left")
+	previewName:SetText("Defias Raider")
+
+	local previewHp = previewSection:CreateFontString(nil, "OVERLAY")
+	SafeSetFont(previewHp, GetUIFont(), 12, "THINOUTLINE")
+	previewHp:SetTextColor(0.6, 1, 0.6, 1)
+	previewHp:SetPoint("TopRight", previewSection, "TopRight", -4, -16)
+	previewHp:SetJustifyH("Right")
+	previewHp:SetText("2453")
+
+	local previewCurseTimer = previewSection:CreateFontString(nil, "OVERLAY")
+	SafeSetFont(previewCurseTimer, GetUIFont(), 12, "OUTLINE")
+	previewCurseTimer:SetTextColor(1, 0.9, 0.3, 1)
+	previewCurseTimer:SetPoint("TopLeft", previewSection, "TopLeft", 4, -36)
+	previewCurseTimer:SetJustifyH("Left")
+	previewCurseTimer:SetText("Curse timer: 12")
+
+	local previewSacrifice = previewSection:CreateFontString(nil, "OVERLAY")
+	SafeSetFont(previewSacrifice, GetUIFont(), 10, "OUTLINE")
+	previewSacrifice:SetTextColor(0.8, 0.6, 1, 1)
+	previewSacrifice:SetPoint("TopLeft", previewSection, "TopLeft", 4, -54)
+	previewSacrifice:SetJustifyH("Left")
+	previewSacrifice:SetText("Sacrifice: 18s | 1200 absorb")
+
+	local function ApplyPreviewFont(fontPath)
+		previewName:SetFont(fontPath, 12, "THINOUTLINE")
+		previewHp:SetFont(fontPath, 12, "THINOUTLINE")
+		previewCurseTimer:SetFont(fontPath, 12, "OUTLINE")
+		previewSacrifice:SetFont(fontPath, 10, "OUTLINE")
+	end
+	ui.UpdateFontPreview = ApplyPreviewFont
+
 	local scrollFrame = CreateFrame("ScrollFrame", "CursiveSettingsScrollFrame", f, "UIPanelScrollFrameTemplate")
-	scrollFrame:SetPoint("TopLeft", f, "TopLeft", 16, -32)
+	scrollFrame:SetPoint("TopLeft", f, "TopLeft", 16, -116)
 	scrollFrame:SetPoint("BottomRight", f, "BottomRight", -32, 16)
 
 	local content = CreateFrame("Frame", nil, scrollFrame)
