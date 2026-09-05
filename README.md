@@ -10,6 +10,8 @@
 
 -1.4 added sacrifice bar
 
+-1.5 added fonts 
+
 <img width="1631" height="1064" alt="image" src="https://github.com/user-attachments/assets/86281c6d-a178-4709-8e02-628c7f6219ba" />
 
 
